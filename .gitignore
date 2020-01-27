@@ -27,3 +27,5 @@ hs_err_pid*
 db/**
 /target/**
 /target/
+
+src/main/generated/**
