@@ -7,14 +7,21 @@ import org.slf4j.LoggerFactory;
 
 import com.github.rjeschke.txtmark.Processor;
 
+import io.netty.handler.codec.http.HttpStatusClass;
+import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.http.HttpServer;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
+import io.vertx.ext.web.client.HttpResponse;
+import io.vertx.ext.web.client.WebClient;
+import io.vertx.ext.web.client.WebClientOptions;
+import io.vertx.ext.web.codec.BodyCodec;
 import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.ext.web.templ.freemarker.FreeMarkerTemplateEngine;
 import io.vertx.guides.wiki.database.WikiDatabaseService;
@@ -30,6 +37,8 @@ public class HttpServerVerticle extends AbstractVerticle {
 	
 	private FreeMarkerTemplateEngine freeMarkerTemplateEngine;
 
+	private WebClient webClient;
+	
 	@Override
 	public void start(Promise<Void> promise) throws Exception {
 		wikiDbQueue = config().getString(CONFIG_WIKI_DB_QUEUE, "wikidb.queue");
@@ -43,7 +52,8 @@ public class HttpServerVerticle extends AbstractVerticle {
 		router.post("/save").handler(this::pageUpdateHandler);
 		router.post("/create").handler(this::pageCreateHandler);
 		router.post("/delete").handler(this::pageDeletionHandler);
-
+		router.get("/backup").handler(this::backupHandler);
+		
 		freeMarkerTemplateEngine = FreeMarkerTemplateEngine.create(vertx);
 
 		int portNumber = config().getInteger(CONFIG_HTTP_SERVER_PORT, 8080);
@@ -56,6 +66,10 @@ public class HttpServerVerticle extends AbstractVerticle {
 				promise.fail(ar.cause());
 			}
 		});
+		webClient = WebClient.create(vertx, new WebClientOptions()
+											.setSsl(true)
+											.setUserAgent("vert-x3"));
+		
 	}
 
 	private void indexHandler(RoutingContext context) {
@@ -151,6 +165,63 @@ public class HttpServerVerticle extends AbstractVerticle {
 		context.response().setStatusCode(303);
 		context.response().putHeader("Location", location);
 		context.response().end();
+	}
+	
+	private void backupHandler(RoutingContext context) {
+		LOGGER.info("in backupHandler");
+		dbService.fetchAllPagesData(reply -> {
+			if(reply.succeeded()) {
+				JsonArray filesObject = new JsonArray();
+				
+				JsonObject payload = new JsonObject()
+						.put("files", filesObject)
+						.put("language", "plaintext")
+						.put("title", "vertx-wiki-backup")
+						.put("public", true);
+				
+				reply
+					.result()
+					.forEach(page -> {
+						filesObject.add(new JsonObject()
+											.put("name", page.getString("NAME"))
+											.put("content", page.getString("CONTENT"))
+										);
+					});
+				
+				webClient
+					.post(443, "snippets.glot.io", "/snippets")
+					.putHeader("Content-Type", "application/json")
+					.as(BodyCodec.jsonObject())
+					.sendJsonObject(payload, postBackup -> {
+						LOGGER.info(String.format("reponse : %s", postBackup.result().body()));
+						if(postBackup.succeeded()) {
+							final HttpResponse<JsonObject> responsePost = postBackup.result();
+							JsonObject body = responsePost.body();
+							if(HttpStatusClass.SUCCESS.contains(responsePost.statusCode())) {
+								String url = String.format("https://glot.io/snippets/%s", body.getString("id"));
+								context.put("backup_gist_url", url);
+								indexHandler(context);
+							} else {
+								final StringBuilder message = new StringBuilder();
+								message.append("Could not backup the wiki: ");
+								if(!body.isEmpty()) {
+									message.append(System.getProperty("line.separator"))
+									.append(body.encodePrettily());
+								}
+								LOGGER.error(message.toString());
+								context.fail(502);
+							}
+						} else {
+							LOGGER.error("could not post snippet to Glot.io", postBackup.cause());
+							context.fail(postBackup.cause());
+						}
+					});
+				
+			} else {
+				LOGGER.error("failed at fetching data to backup");
+				context.fail(reply.cause());
+			}
+		});
 	}
 
 	private void pageDeletionHandler(RoutingContext context) {

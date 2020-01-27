@@ -1,5 +1,6 @@
 package io.vertx.guides.wiki.database;
 
+import java.util.List;
 import java.util.Map;
 
 import io.vertx.codegen.annotations.Fluent;
@@ -19,6 +20,9 @@ public interface WikiDatabaseService {
 	@Fluent
 	WikiDatabaseService fetchAllPages(Handler<AsyncResult<JsonArray>> resultHandler);
 
+	@Fluent
+	WikiDatabaseService fetchAllPagesData(Handler<AsyncResult<List<JsonObject>>> resultHandler);
+	
 	@Fluent
 	WikiDatabaseService fetchPage(String name, Handler<AsyncResult<JsonObject>> resultHandler);
 

@@ -72,8 +72,10 @@
 			<version>2.3.4</version>
 		</dependency>
 
-
-
+		<dependency>
+			<groupId>io.vertx</groupId>
+			<artifactId>vertx-web-client</artifactId>
+		</dependency>
 
 		<dependency>
 			<groupId>ch.qos.logback</groupId>
