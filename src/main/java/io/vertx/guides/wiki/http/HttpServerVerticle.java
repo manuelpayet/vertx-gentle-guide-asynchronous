@@ -1,5 +1,12 @@
 package io.vertx.guides.wiki.http;
 
+import static io.vertx.guides.wiki.database.DatabaseConstants.CONFIG_WIKIDB_JDBC_DRIVER_CLASS;
+import static io.vertx.guides.wiki.database.DatabaseConstants.CONFIG_WIKIDB_JDBC_MAX_POOL_SIZE;
+import static io.vertx.guides.wiki.database.DatabaseConstants.CONFIG_WIKIDB_JDBC_URL;
+import static io.vertx.guides.wiki.database.DatabaseConstants.DEFAULT_JDBC_MAX_POOL_SIZE;
+import static io.vertx.guides.wiki.database.DatabaseConstants.DEFAULT_WIKIDB_JDBC_DRIVER_CLASS;
+import static io.vertx.guides.wiki.database.DatabaseConstants.DEFAULT_WIKIDB_JDBC_URL;
+
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
@@ -16,15 +23,26 @@ import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.http.HttpServer;
+import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.net.JksOptions;
+import io.vertx.ext.auth.jdbc.JDBCAuth;
+import io.vertx.ext.jdbc.JDBCClient;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
 import io.vertx.ext.web.codec.BodyCodec;
+import io.vertx.ext.web.handler.AuthHandler;
 import io.vertx.ext.web.handler.BodyHandler;
+import io.vertx.ext.web.handler.CookieHandler;
+import io.vertx.ext.web.handler.FormLoginHandler;
+import io.vertx.ext.web.handler.RedirectAuthHandler;
+import io.vertx.ext.web.handler.SessionHandler;
+import io.vertx.ext.web.handler.UserSessionHandler;
+import io.vertx.ext.web.sstore.LocalSessionStore;
 import io.vertx.ext.web.templ.freemarker.FreeMarkerTemplateEngine;
 import io.vertx.guides.wiki.database.WikiDatabaseService;
 
@@ -46,8 +64,29 @@ public class HttpServerVerticle extends AbstractVerticle {
 		wikiDbQueue = config().getString(CONFIG_WIKI_DB_QUEUE, "wikidb.queue");
 		dbService = WikiDatabaseService.createProxy(vertx, wikiDbQueue);
 
-		HttpServer server = vertx.createHttpServer();
+		JDBCClient client = JDBCClient.createShared(vertx,
+				new JsonObject().put("url", config().getString(CONFIG_WIKIDB_JDBC_URL, DEFAULT_WIKIDB_JDBC_URL))
+						.put("driver_class",
+								config().getString(CONFIG_WIKIDB_JDBC_DRIVER_CLASS, DEFAULT_WIKIDB_JDBC_DRIVER_CLASS))
+						.put("max_pool_size",
+								config().getInteger(CONFIG_WIKIDB_JDBC_MAX_POOL_SIZE, DEFAULT_JDBC_MAX_POOL_SIZE)));
+
+		JDBCAuth auth = JDBCAuth.create(vertx, client);
+
+		HttpServer server = vertx.createHttpServer(new HttpServerOptions().setSsl(true)
+				.setKeyStoreOptions(new JksOptions().setPath("server-keystore.jks").setPassword("secret")));
+
 		Router router = Router.router(vertx);
+
+		router.route().handler(BodyHandler.create());
+		router.route().handler(SessionHandler.create(LocalSessionStore.create(vertx)));
+		router.route().handler(UserSessionHandler.create(auth));
+
+		AuthHandler authHandler = RedirectAuthHandler.create(auth, "/login");
+		router.route("/").handler(authHandler);
+		router.route("/wiki/*").handler(authHandler);
+		router.route("/action/*").handler(authHandler);
+
 		router.get("/").handler(this::indexHandler);
 		router.get("/wiki/:page").handler(this::pageRenderingHandler);
 		router.post().handler(BodyHandler.create());
@@ -55,6 +94,15 @@ public class HttpServerVerticle extends AbstractVerticle {
 		router.post("/create").handler(this::pageCreateHandler);
 		router.post("/delete").handler(this::pageDeletionHandler);
 		router.get("/backup").handler(this::backupHandler);
+
+		router.get("/login").handler(this::loginHandler);
+		router.post("/login-auth").handler(FormLoginHandler.create(auth));
+
+		router.get("/logout").handler(context -> {
+
+			context.clearUser();
+			context.response().setStatusCode(302).putHeader("Location", "/").end();
+		});
 
 		Router apiRouter = Router.router(vertx);
 		apiRouter.get("/pages").handler(this::apiRoot);
@@ -82,26 +130,45 @@ public class HttpServerVerticle extends AbstractVerticle {
 
 	}
 
-	private void indexHandler(RoutingContext context) {
-		dbService.fetchAllPages(reply -> {
-			LOGGER.info("response received from Database for indexHandler");
-			if (reply.succeeded()) {
-				context.put("title", "Wiki Home");
-				context.put("pages", reply.result().getList());
-				freeMarkerTemplateEngine.render(context.data(), "templates/index.ftl", ar -> {
-					if (ar.succeeded()) {
-						context.response().putHeader("Content-Type", "text/html");
-						context.response().end(ar.result());
-					} else {
-						LOGGER.error("indexHandler Error", ar.cause());
-						context.fail(ar.cause());
-					}
-				});
+	private void loginHandler(RoutingContext context) {
+		context.put("title", "Login");
+		freeMarkerTemplateEngine.render(context.data(), "templates/login.ftl", ar -> {
+			if (ar.succeeded()) {
+				context.response().putHeader("Content-Type", "text/html");
+				context.response().end(ar.result());
 			} else {
-				LOGGER.error("indexHandler Error", reply.cause());
-				context.fail(reply.cause());
+				LOGGER.error("could not render login page", ar.cause());
+				context.fail(ar.cause());
 			}
 		});
+	}
+
+	private void indexHandler(RoutingContext context) {
+		context.user().isAuthorized("create", res -> {
+			boolean canCreatePage = res.succeeded() && res.result();
+			dbService.fetchAllPages(reply -> {
+				LOGGER.info("response received from Database for indexHandler");
+				if (reply.succeeded()) {
+					context.put("title", "Wiki Home");
+					context.put("pages", reply.result().getList());
+					context.put("canCreatePage", canCreatePage);
+					context.put("username", context.user().principal().getString("username"));
+					freeMarkerTemplateEngine.render(context.data(), "templates/index.ftl", ar -> {
+						if (ar.succeeded()) {
+							context.response().putHeader("Content-Type", "text/html");
+							context.response().end(ar.result());
+						} else {
+							LOGGER.error("indexHandler Error", ar.cause());
+							context.fail(ar.cause());
+						}
+					});
+				} else {
+					LOGGER.error("indexHandler Error", reply.cause());
+					context.fail(reply.cause());
+				}
+			});
+		});
+
 	}
 
 	private static final String EMPTY_PAGE_MARKDOWN = "# A new page\n" + "\n" + "Feel-free to write in Markdown!\n";
@@ -222,14 +289,20 @@ public class HttpServerVerticle extends AbstractVerticle {
 	}
 
 	private void pageDeletionHandler(RoutingContext context) {
-		String id = context.request().getParam("id");
-		dbService.deletePage(Integer.valueOf(id), reply -> {
-			if (reply.succeeded()) {
-				context.response().setStatusCode(303);
-				context.response().putHeader("Location", "/");
-				context.response().end();
+		context.user().isAuthorized("delete", isDeletableResultHandler -> {
+			if (isDeletableResultHandler.succeeded() && isDeletableResultHandler.result()) {
+				String id = context.request().getParam("id");
+				dbService.deletePage(Integer.valueOf(id), reply -> {
+					if (reply.succeeded()) {
+						context.response().setStatusCode(303);
+						context.response().putHeader("Location", "/");
+						context.response().end();
+					} else {
+						context.fail(reply.cause());
+					}
+				});
 			} else {
-				context.fail(reply.cause());
+				context.response().setStatusCode(403).end();
 			}
 		});
 	}

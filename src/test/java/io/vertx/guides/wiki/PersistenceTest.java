@@ -13,6 +13,7 @@ import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
+import io.vertx.guides.wiki.database.DatabaseConstants;
 import io.vertx.guides.wiki.database.WikiDatabaseService;
 import io.vertx.guides.wiki.database.WikiDatabaseVerticle;
 import io.vertx.guides.wiki.http.HttpServerVerticle;
@@ -30,12 +31,12 @@ public class PersistenceTest {
 		vertx = Vertx.vertx();
 		
 		final JsonObject databaseConf = new JsonObject()
-											.put(WikiDatabaseVerticle.CONFIG_WIKIDB_JDBC_URL, "jdbc:hsqldb:mem:testdb;shutdown=true")
-											.put(WikiDatabaseVerticle.CONFIG_WIKIDB_JDBC_MAX_POOL_SIZE, 4);
+											.put(DatabaseConstants.CONFIG_WIKIDB_JDBC_URL, "jdbc:hsqldb:mem:testdb;shutdown=true")
+											.put(DatabaseConstants.CONFIG_WIKIDB_JDBC_MAX_POOL_SIZE, 4);
 		
 		vertx.deployVerticle(new WikiDatabaseVerticle(), new DeploymentOptions().setConfig(databaseConf), 
 															context.asyncAssertSuccess(result -> 
-															dbService = WikiDatabaseService.createProxy(vertx, WikiDatabaseVerticle.CONFIG_WIKIDB_QUEUE)));
+															dbService = WikiDatabaseService.createProxy(vertx, DatabaseConstants.CONFIG_WIKIDB_QUEUE)));
 
 	}
 	

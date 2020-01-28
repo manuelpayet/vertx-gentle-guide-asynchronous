@@ -23,13 +23,9 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.jdbc.JDBCClient;
 import io.vertx.serviceproxy.ServiceBinder;
 
-public class WikiDatabaseVerticle extends AbstractVerticle {
-	public static final String CONFIG_WIKIDB_JDBC_URL = "wikidb.jdbc.url";
-	public static final String CONFIG_WIKIDB_JDBC_DRIVER_CLASS = "wikidb.jdbc.driver_class";
-	public static final String CONFIG_WIKIDB_JDBC_MAX_POOL_SIZE = "wikidb.jdbc.max_pool_size";
-	public static final String CONFIG_WIKIDB_SQL_QUERIES_RESOURCE_FILE = "wikidb.sqlqueries.resource.file";
+import static io.vertx.guides.wiki.database.DatabaseConstants.*;
 
-	public static final String CONFIG_WIKIDB_QUEUE = "wikidb.queue";
+public class WikiDatabaseVerticle extends AbstractVerticle {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(WikiDatabaseVerticle.class);
 
@@ -37,7 +33,7 @@ public class WikiDatabaseVerticle extends AbstractVerticle {
 
 	private void loadSqlQueries() throws IOException {
 		String queriesFile = config().getString(CONFIG_WIKIDB_SQL_QUERIES_RESOURCE_FILE,
-				"./src/main/resources/db-queries.properties");
+				"./src/main/resources/db-queries.properties"); //TODO: dirty: will only work in IDE, will not work when packaged
 		Properties queriesProp = new Properties();
 		LOGGER.info("Absolute path of queries property file : " + new File(queriesFile).getAbsolutePath());
 		try (InputStream queriesInputStream = new FileInputStream(queriesFile)) {
@@ -54,10 +50,10 @@ public class WikiDatabaseVerticle extends AbstractVerticle {
 		loadSqlQueries();
 
 		dbClient = JDBCClient.createShared(vertx,
-				new JsonObject().put("url", config().getString(CONFIG_WIKIDB_JDBC_URL, "jdbc:hsqldb:file:db/wiki"))
+				new JsonObject().put("url", config().getString(CONFIG_WIKIDB_JDBC_URL, DEFAULT_WIKIDB_JDBC_URL))
 						.put("driver_class",
-								config().getString(CONFIG_WIKIDB_JDBC_DRIVER_CLASS, "org.hsqldb.jdbcDriver"))
-						.put("max_pool_size", config().getInteger(CONFIG_WIKIDB_JDBC_MAX_POOL_SIZE, 30)));
+								config().getString(CONFIG_WIKIDB_JDBC_DRIVER_CLASS, DEFAULT_WIKIDB_JDBC_DRIVER_CLASS))
+						.put("max_pool_size", config().getInteger(CONFIG_WIKIDB_JDBC_MAX_POOL_SIZE, DEFAULT_JDBC_MAX_POOL_SIZE)));
 		WikiDatabaseService.create(dbClient, sqlQueries, ready -> {
 			if(ready.succeeded()) {
 				ServiceBinder binder = new ServiceBinder(vertx);
