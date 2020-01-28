@@ -11,13 +11,17 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.unit.Async;
 import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
+import io.vertx.ext.web.client.WebClient;
+import io.vertx.ext.web.client.WebClientOptions;
 import io.vertx.guides.wiki.database.WikiDatabaseService;
 import io.vertx.guides.wiki.database.WikiDatabaseVerticle;
+import io.vertx.guides.wiki.http.HttpServerVerticle;
 
 @RunWith(VertxUnitRunner.class)
-public class SomeTest {
+public class PersistenceTest {
 	private Vertx vertx;
 	private WikiDatabaseService dbService;
+	
 	
 	
 	
@@ -32,6 +36,7 @@ public class SomeTest {
 		vertx.deployVerticle(new WikiDatabaseVerticle(), new DeploymentOptions().setConfig(databaseConf), 
 															context.asyncAssertSuccess(result -> 
 															dbService = WikiDatabaseService.createProxy(vertx, WikiDatabaseVerticle.CONFIG_WIKIDB_QUEUE)));
+
 	}
 	
 	@Test(timeout = 3000)

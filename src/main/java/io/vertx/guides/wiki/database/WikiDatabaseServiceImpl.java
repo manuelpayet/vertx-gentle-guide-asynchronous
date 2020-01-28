@@ -2,6 +2,7 @@ package io.vertx.guides.wiki.database;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -133,6 +134,33 @@ public class WikiDatabaseServiceImpl implements WikiDatabaseService {
 			} else {
 				LOGGER.error("error when fetching all pages data");
 				resultHandler.handle(Future.failedFuture(res.cause()));
+			}
+		});
+		return this;
+	}
+
+	@Override
+	public WikiDatabaseService fetchPageById(int id, Handler<AsyncResult<JsonObject>> resultHandler) {
+		
+		dbClient.queryWithParams(sqlQueries.get(SqlQuery.GET_PAGE_BY_ID), new JsonArray().add(id), fetchByIdHandler -> {
+			if(fetchByIdHandler.succeeded()) {
+				final List<JsonObject> results = fetchByIdHandler.result().getRows();
+				final Optional<JsonObject> pageData = results.stream().findFirst();
+				final JsonObject payload = pageData.map(result -> new JsonObject()
+															.put("found", true)
+															.put("id", result.getInteger("ID"))
+															.put("name", result.getString("NAME"))
+															.put("content", result.getString("CONTENT")))
+															.orElse(
+																	new JsonObject()
+																		.put("found", false)
+																		.put("id", id)
+															);
+				resultHandler.handle(Future.succeededFuture(payload));
+				
+			} else {
+				LOGGER.error("could not fetch by id", fetchByIdHandler.cause());
+				resultHandler.handle(Future.failedFuture(fetchByIdHandler.cause()));
 			}
 		});
 		return this;
