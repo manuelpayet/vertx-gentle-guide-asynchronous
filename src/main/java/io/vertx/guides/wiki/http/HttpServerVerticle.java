@@ -20,6 +20,7 @@ import com.github.rjeschke.txtmark.Processor;
 import io.netty.handler.codec.http.HttpStatusClass;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.http.HttpServer;
@@ -27,7 +28,11 @@ import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.JksOptions;
+import io.vertx.ext.auth.PubSecKeyOptions;
+import io.vertx.ext.auth.User;
 import io.vertx.ext.auth.jdbc.JDBCAuth;
+import io.vertx.ext.auth.jwt.JWTAuth;
+import io.vertx.ext.auth.jwt.JWTAuthOptions;
 import io.vertx.ext.jdbc.JDBCClient;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
@@ -37,8 +42,8 @@ import io.vertx.ext.web.client.WebClientOptions;
 import io.vertx.ext.web.codec.BodyCodec;
 import io.vertx.ext.web.handler.AuthHandler;
 import io.vertx.ext.web.handler.BodyHandler;
-import io.vertx.ext.web.handler.CookieHandler;
 import io.vertx.ext.web.handler.FormLoginHandler;
+import io.vertx.ext.web.handler.JWTAuthHandler;
 import io.vertx.ext.web.handler.RedirectAuthHandler;
 import io.vertx.ext.web.handler.SessionHandler;
 import io.vertx.ext.web.handler.UserSessionHandler;
@@ -75,13 +80,15 @@ public class HttpServerVerticle extends AbstractVerticle {
 
 		HttpServer server = vertx.createHttpServer(new HttpServerOptions().setSsl(true)
 				.setKeyStoreOptions(new JksOptions().setPath("server-keystore.jks").setPassword("secret")));
-
+		
 		Router router = Router.router(vertx);
 
+
+		
 		router.route().handler(BodyHandler.create());
 		router.route().handler(SessionHandler.create(LocalSessionStore.create(vertx)));
 		router.route().handler(UserSessionHandler.create(auth));
-
+		
 		AuthHandler authHandler = RedirectAuthHandler.create(auth, "/login");
 		router.route("/").handler(authHandler);
 		router.route("/wiki/*").handler(authHandler);
@@ -105,6 +112,77 @@ public class HttpServerVerticle extends AbstractVerticle {
 		});
 
 		Router apiRouter = Router.router(vertx);
+		
+		JWTAuth jwtAuth = JWTAuth.create(vertx, new JWTAuthOptions()
+			      .addPubSecKey(new PubSecKeyOptions()
+			        .setAlgorithm("HS256")
+			        .setPublicKey("secret")
+			        .setSymmetric(true)));
+		apiRouter.route().handler(JWTAuthHandler.create(jwtAuth, "/api/token"));
+		
+		apiRouter.get("/token").handler(context -> {
+			LOGGER.info(String.format("headers: %s", context.request().headers()));
+			final JsonObject authObject = new JsonObject()
+					.put("username", context.request().headers().get("login"))
+					.put("password", context.request().headers().get("password"))
+					.put("jwt", "dG90bzp0aXRp");
+			
+			auth.authenticate(authObject, authResult -> {
+				LOGGER.info("auth reussi? " + authResult.succeeded());
+				if (authResult.succeeded()) {
+					final User user = authResult.result();
+					
+					final Promise<String> canCreatePromise = Promise.promise();
+					user.isAuthorized("create", canCreateHandler -> {
+						
+						context.put("userCanCreate", canCreateHandler.succeeded() && canCreateHandler.result());
+						canCreatePromise.complete();
+					});
+					
+					final Future<String> canDeletePromise = canCreatePromise.future().compose((t) -> {
+						final Promise<String> delPromise = Promise.promise();
+						user.isAuthorized("delete", h -> {
+							context.put("userCanDelete", h.succeeded() && h.result());
+							delPromise.complete();
+						});
+						return delPromise.future();
+					});
+					
+					final Future<String> userRightsComposition = canDeletePromise.compose((deletePromisePromiseResult) -> {
+						final Promise<String> updatePromise = Promise.promise();
+						user.isAuthorized("delete", (t) -> {
+							context.put("userCanUpdate", t.succeeded() && t.result());
+							updatePromise.complete();
+						});
+						return updatePromise.future();
+					});
+					
+					userRightsComposition.setHandler((compositionResult) -> {
+						if(compositionResult.succeeded()) {
+							final String token = jwtAuth.generateToken(new JsonObject()
+																		.put("username", context.request().getHeader("login"))
+																		.put("canCreate", (Boolean) context.get("userCanCreate"))
+																		.put("canUpdate", (Boolean) context.get("userCanUpdate"))
+																		.put("canDelete", (Boolean) context.get("userCanDelete"))
+																	  );
+							context.response().putHeader("Content-Type", "text/plain").end(token);
+							
+						} else {
+							LOGGER.error("something came up when trying to compute user rights", compositionResult.cause());
+							context.fail(compositionResult.cause());
+						}
+					});
+					
+				} else {
+					LOGGER.error("can't login user", authResult.cause());
+					context.fail(401);
+				}
+				
+				
+			});
+		});
+		
+		
 		apiRouter.get("/pages").handler(this::apiRoot);
 		apiRouter.get("/pages/:id").handler(this::apiGetPage);
 		apiRouter.post().handler(BodyHandler.create());
