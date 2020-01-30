@@ -18,38 +18,39 @@ import org.slf4j.LoggerFactory;
 import com.github.rjeschke.txtmark.Processor;
 
 import io.netty.handler.codec.http.HttpStatusClass;
-import io.vertx.core.AbstractVerticle;
+import io.reactivex.Single;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
-import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.JksOptions;
 import io.vertx.ext.auth.PubSecKeyOptions;
-import io.vertx.ext.auth.User;
-import io.vertx.ext.auth.jdbc.JDBCAuth;
-import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.auth.jwt.JWTAuthOptions;
-import io.vertx.ext.jdbc.JDBCClient;
-import io.vertx.ext.web.Router;
-import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.client.HttpResponse;
-import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
-import io.vertx.ext.web.codec.BodyCodec;
-import io.vertx.ext.web.handler.AuthHandler;
-import io.vertx.ext.web.handler.BodyHandler;
-import io.vertx.ext.web.handler.FormLoginHandler;
-import io.vertx.ext.web.handler.JWTAuthHandler;
-import io.vertx.ext.web.handler.RedirectAuthHandler;
-import io.vertx.ext.web.handler.SessionHandler;
-import io.vertx.ext.web.handler.UserSessionHandler;
-import io.vertx.ext.web.sstore.LocalSessionStore;
-import io.vertx.ext.web.templ.freemarker.FreeMarkerTemplateEngine;
 import io.vertx.guides.wiki.database.WikiDatabaseService;
+import io.vertx.reactivex.core.AbstractVerticle;
+import io.vertx.reactivex.core.http.HttpServer;
+import io.vertx.reactivex.ext.auth.User;
+import io.vertx.reactivex.ext.auth.jdbc.JDBCAuth;
+import io.vertx.reactivex.ext.auth.jwt.JWTAuth;
+import io.vertx.reactivex.ext.jdbc.JDBCClient;
+import io.vertx.reactivex.ext.web.Router;
+import io.vertx.reactivex.ext.web.RoutingContext;
+import io.vertx.reactivex.ext.web.client.HttpResponse;
+import io.vertx.reactivex.ext.web.client.WebClient;
+import io.vertx.reactivex.ext.web.codec.BodyCodec;
+import io.vertx.reactivex.ext.web.handler.AuthHandler;
+import io.vertx.reactivex.ext.web.handler.BodyHandler;
+import io.vertx.reactivex.ext.web.handler.FormLoginHandler;
+import io.vertx.reactivex.ext.web.handler.JWTAuthHandler;
+import io.vertx.reactivex.ext.web.handler.RedirectAuthHandler;
+import io.vertx.reactivex.ext.web.handler.SessionHandler;
+import io.vertx.reactivex.ext.web.handler.UserSessionHandler;
+import io.vertx.reactivex.ext.web.sstore.LocalSessionStore;
+import io.vertx.reactivex.ext.web.templ.freemarker.FreeMarkerTemplateEngine;
 
 public class HttpServerVerticle extends AbstractVerticle {
 	private static final Logger LOGGER = LoggerFactory.getLogger(HttpServerVerticle.class);
@@ -67,7 +68,7 @@ public class HttpServerVerticle extends AbstractVerticle {
 	@Override
 	public void start(Promise<Void> promise) throws Exception {
 		wikiDbQueue = config().getString(CONFIG_WIKI_DB_QUEUE, "wikidb.queue");
-		dbService = WikiDatabaseService.createProxy(vertx, wikiDbQueue);
+		dbService = WikiDatabaseService.createProxy(vertx.getDelegate(), wikiDbQueue);
 
 		JDBCClient client = JDBCClient.createShared(vertx,
 				new JsonObject().put("url", config().getString(CONFIG_WIKIDB_JDBC_URL, DEFAULT_WIKIDB_JDBC_URL))
@@ -127,60 +128,23 @@ public class HttpServerVerticle extends AbstractVerticle {
 					.put("password", context.request().headers().get("password"))
 					.put("jwt", "dG90bzp0aXRp");
 			
-			auth.authenticate(authObject, authResult -> {
-				LOGGER.info("auth reussi? " + authResult.succeeded());
-				if (authResult.succeeded()) {
-					final User user = authResult.result();
-					
-					final Promise<String> canCreatePromise = Promise.promise();
-					user.isAuthorized("create", canCreateHandler -> {
-						
-						context.put("userCanCreate", canCreateHandler.succeeded() && canCreateHandler.result());
-						canCreatePromise.complete();
-					});
-					
-					final Future<String> canDeletePromise = canCreatePromise.future().compose((t) -> {
-						final Promise<String> delPromise = Promise.promise();
-						user.isAuthorized("delete", h -> {
-							context.put("userCanDelete", h.succeeded() && h.result());
-							delPromise.complete();
-						});
-						return delPromise.future();
-					});
-					
-					final Future<String> userRightsComposition = canDeletePromise.compose((deletePromisePromiseResult) -> {
-						final Promise<String> updatePromise = Promise.promise();
-						user.isAuthorized("delete", (t) -> {
-							context.put("userCanUpdate", t.succeeded() && t.result());
-							updatePromise.complete();
-						});
-						return updatePromise.future();
-					});
-					
-					userRightsComposition.setHandler((compositionResult) -> {
-						if(compositionResult.succeeded()) {
-							final String token = jwtAuth.generateToken(new JsonObject()
-																		.put("username", context.request().getHeader("login"))
-																		.put("canCreate", (Boolean) context.get("userCanCreate"))
-																		.put("canUpdate", (Boolean) context.get("userCanUpdate"))
-																		.put("canDelete", (Boolean) context.get("userCanDelete"))
-																	  );
-							context.response().putHeader("Content-Type", "text/plain").end(token);
-							
-						} else {
-							LOGGER.error("something came up when trying to compute user rights", compositionResult.cause());
-							context.fail(compositionResult.cause());
-						}
-					});
-					
-				} else {
-					LOGGER.error("can't login user", authResult.cause());
-					context.fail(401);
-				}
+			auth.rxAuthenticate(authObject).flatMap(user -> {
+				final Single<Boolean> userCanCreate = user.rxIsAuthorized("create");
+				final Single<Boolean> userCanUpdate = user.rxIsAuthorized("update");
+				final Single<Boolean> userCanDelete = user.rxIsAuthorized("delete");
 				
-				
-			});
+				return Single.zip(userCanCreate, userCanUpdate, userCanDelete, (resCreate, resUpdate, resDelete) -> {
+					LOGGER.info(String.format("create: %s| update: %s | delete: %s", resCreate, resUpdate, resDelete)); 
+					return jwtAuth.generateToken(new JsonObject()
+							.put("username", context.request().getHeader("login"))
+							.put("canCreate", (Boolean) context.get("userCanCreate"))
+							.put("canUpdate", (Boolean) context.get("userCanUpdate"))
+							.put("canDelete", (Boolean) context.get("userCanDelete"))
+						  );
+				});
+			}).subscribe(token -> context.response().putHeader("Content-Type", "text/plain").end(token), t -> context.fail(401));
 		});
+			
 		
 		
 		apiRouter.get("/pages").handler(this::apiRoot);

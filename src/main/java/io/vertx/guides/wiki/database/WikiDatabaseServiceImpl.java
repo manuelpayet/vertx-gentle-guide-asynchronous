@@ -13,8 +13,10 @@ import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
-import io.vertx.ext.jdbc.JDBCClient;
-import io.vertx.ext.sql.SQLConnection;
+import io.vertx.ext.sql.ResultSet;
+import io.vertx.reactivex.SingleHelper;
+import io.vertx.reactivex.ext.jdbc.JDBCClient;
+import io.vertx.reactivex.ext.sql.SQLConnection;
 
 public class WikiDatabaseServiceImpl implements WikiDatabaseService {
 
@@ -127,40 +129,40 @@ public class WikiDatabaseServiceImpl implements WikiDatabaseService {
 
 	@Override
 	public WikiDatabaseService fetchAllPagesData(Handler<AsyncResult<List<JsonObject>>> resultHandler) {
-		
-		dbClient.query(sqlQueries.get(SqlQuery.ALL_PAGES_DATA), res -> {
-			if(res.succeeded()) {
-				resultHandler.handle(Future.succeededFuture(res.result().getRows()));
-			} else {
-				LOGGER.error("error when fetching all pages data");
-				resultHandler.handle(Future.failedFuture(res.cause()));
-			}
-		});
+		dbClient.rxQuery(sqlQueries.get(SqlQuery.ALL_PAGES_DATA))
+				.map(ResultSet::getRows)
+				.subscribe(SingleHelper.toObserver(resultHandler));
 		return this;
 	}
 
 	@Override
 	public WikiDatabaseService fetchPageById(int id, Handler<AsyncResult<JsonObject>> resultHandler) {
+		dbClient.rxQueryWithParams(sqlQueries.get(SqlQuery.GET_PAGE_BY_ID), new JsonArray().add(id))
+		.subscribe((result) -> {
+			final List<JsonObject> results = result.getRows();
+			final Optional<JsonObject> pageData = results.stream().findFirst();
+			final JsonObject payload = pageData.map(r -> new JsonObject()
+														.put("found", true)
+														.put("id", r.getInteger("ID"))
+														.put("name", r.getString("NAME"))
+														.put("content", r.getString("CONTENT")))
+														.orElse(
+																new JsonObject()
+																	.put("found", false)
+																	.put("id", id)
+														);
+			resultHandler.handle(Future.succeededFuture(payload));
+		}, (exception) -> {
+			LOGGER.error("could not fetch by id", exception);
+			resultHandler.handle(Future.failedFuture(exception));
+		});
 		
 		dbClient.queryWithParams(sqlQueries.get(SqlQuery.GET_PAGE_BY_ID), new JsonArray().add(id), fetchByIdHandler -> {
 			if(fetchByIdHandler.succeeded()) {
-				final List<JsonObject> results = fetchByIdHandler.result().getRows();
-				final Optional<JsonObject> pageData = results.stream().findFirst();
-				final JsonObject payload = pageData.map(result -> new JsonObject()
-															.put("found", true)
-															.put("id", result.getInteger("ID"))
-															.put("name", result.getString("NAME"))
-															.put("content", result.getString("CONTENT")))
-															.orElse(
-																	new JsonObject()
-																		.put("found", false)
-																		.put("id", id)
-															);
-				resultHandler.handle(Future.succeededFuture(payload));
+				
 				
 			} else {
-				LOGGER.error("could not fetch by id", fetchByIdHandler.cause());
-				resultHandler.handle(Future.failedFuture(fetchByIdHandler.cause()));
+				
 			}
 		});
 		return this;
