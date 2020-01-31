@@ -157,14 +157,6 @@ public class WikiDatabaseServiceImpl implements WikiDatabaseService {
 			resultHandler.handle(Future.failedFuture(exception));
 		});
 		
-		dbClient.queryWithParams(sqlQueries.get(SqlQuery.GET_PAGE_BY_ID), new JsonArray().add(id), fetchByIdHandler -> {
-			if(fetchByIdHandler.succeeded()) {
-				
-				
-			} else {
-				
-			}
-		});
 		return this;
 	}
 
