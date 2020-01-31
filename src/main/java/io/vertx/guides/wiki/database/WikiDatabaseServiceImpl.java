@@ -3,11 +3,11 @@ package io.vertx.guides.wiki.database;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.reactivex.Flowable;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -53,16 +53,16 @@ public class WikiDatabaseServiceImpl implements WikiDatabaseService {
 	@Override
 	public WikiDatabaseService fetchAllPages(Handler<AsyncResult<JsonArray>> resultHandler) {
 		LOGGER.info("received request to fetch all pages");
-		dbClient.query(sqlQueries.get(SqlQuery.ALL_PAGES), res -> {
-			if (res.succeeded()) {
-				final List<String> pageNamesFromDb = res.result().getResults().stream()
-						.map(resultLine -> resultLine.getString(0)).sorted().collect(Collectors.toList());
-				resultHandler.handle(Future.succeededFuture(new JsonArray(pageNamesFromDb)));
-			} else {
-				LOGGER.error("Database query error", res.cause());
-				resultHandler.handle(Future.failedFuture(res.cause()));
-			}
-		});
+		
+		dbClient.rxQuery(sqlQueries.get(SqlQuery.ALL_PAGES))
+				.flatMapPublisher(res -> {
+					List<JsonArray> results = res.getResults();
+					return Flowable.fromIterable(results);
+				}).map(json -> json.getString(0))
+				.sorted()
+				.collect(JsonArray::new, JsonArray::add)
+				.subscribe(SingleHelper.toObserver(resultHandler));
+		
 		return this;
 	}
 

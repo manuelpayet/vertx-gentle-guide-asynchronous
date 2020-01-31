@@ -1,5 +1,13 @@
 package io.vertx.guides.wiki.database;
 
+import static io.vertx.guides.wiki.database.DatabaseConstants.CONFIG_WIKIDB_JDBC_DRIVER_CLASS;
+import static io.vertx.guides.wiki.database.DatabaseConstants.CONFIG_WIKIDB_JDBC_MAX_POOL_SIZE;
+import static io.vertx.guides.wiki.database.DatabaseConstants.CONFIG_WIKIDB_JDBC_URL;
+import static io.vertx.guides.wiki.database.DatabaseConstants.CONFIG_WIKIDB_SQL_QUERIES_RESOURCE_FILE;
+import static io.vertx.guides.wiki.database.DatabaseConstants.DEFAULT_JDBC_MAX_POOL_SIZE;
+import static io.vertx.guides.wiki.database.DatabaseConstants.DEFAULT_WIKIDB_JDBC_DRIVER_CLASS;
+import static io.vertx.guides.wiki.database.DatabaseConstants.DEFAULT_WIKIDB_JDBC_URL;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -15,12 +23,12 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Promise;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
-import io.vertx.ext.jdbc.JDBCClient;
+import io.vertx.reactivex.core.AbstractVerticle;
+import io.vertx.reactivex.ext.jdbc.JDBCClient;
 import io.vertx.serviceproxy.ServiceBinder;
 
 import static io.vertx.guides.wiki.database.DatabaseConstants.*;
@@ -56,7 +64,7 @@ public class WikiDatabaseVerticle extends AbstractVerticle {
 						.put("max_pool_size", config().getInteger(CONFIG_WIKIDB_JDBC_MAX_POOL_SIZE, DEFAULT_JDBC_MAX_POOL_SIZE)));
 		WikiDatabaseService.create(dbClient, sqlQueries, ready -> {
 			if(ready.succeeded()) {
-				ServiceBinder binder = new ServiceBinder(vertx);
+				ServiceBinder binder = new ServiceBinder(vertx.getDelegate());
 				binder
 				.setAddress(CONFIG_WIKIDB_QUEUE)
 				.register(WikiDatabaseService.class, ready.result());
